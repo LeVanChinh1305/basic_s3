@@ -24,3 +24,6 @@ ehthumbs.db
 # File log và tạm
 *.log
 *.tmp
+
+
+managed_components/
