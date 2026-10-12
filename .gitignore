@@ -1,0 +1,26 @@
+# Thư mục build của ESP-IDF (rất quan trọng)
+build/
+sdkconfig.old
+sdkconfig.ci
+
+# Lịch sử và cấu hình IDE / Editor
+.history/
+.vscode/*
+!.vscode/settings.json
+*.code-workspace
+
+# Cấu hình & Cache CMake
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# File rác hệ điều hành
+.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+
+# File log và tạm
+*.log
+*.tmp
