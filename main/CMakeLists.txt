@@ -5,11 +5,13 @@ idf_component_register(
         "console/app_console.c"
         "app_littlefs.c"
         "peripheral/app_speaker.c"
+        "network/app_blemesh.c"
 
     INCLUDE_DIRS 
         "."
         "console"
         "peripheral"
+        "network"
     REQUIRES
         freertos
         console
@@ -17,5 +19,7 @@ idf_component_register(
         joltwallet__littlefs
         driver
         json
+        nvs_flash
+        bt
 )
 

@@ -29,8 +29,22 @@
 #define DF_SPK_PLAY_BUF_SIZE        (16 * 1024)
 #define DF_SPK_CONFIG_FILE          "/storage/extra_cfg.json"
 
+// ================== IPC (QUAN LY TASK) ================
+#define DF_LOCK_TIMEOUT_MS          1000    // Timeout mac dinh khi lay mutex
+
+// ================== BLE MESH (KICH BAN 1: ONOFF SERVER) ==================
+#define DF_MESH_COMPANY_ID          0x02E5
+#define DF_MESH_RELAY               1
+#define DF_MESH_DEVICE_NAME_PREFIX  "S3-MESH-"      // Tên trên nRF Mesh = prefix + 2 byte cuối MAC
+#define DF_MESH_EVT_QUEUE_LEN       16
+#define DF_MESH_TASK_STACK          4096
+#define DF_MESH_TASK_PRIO           5
+#define DF_MESH_LOG_DEPTH           32              // Số lệnh ONOFF lưu trong ring buffer (PSRAM)
+#define DF_MESH_STATE_FILE          "/storage/mesh_node.json"
+#define DF_MESH_PERSIST_DELAY_MS    2000            // Gom số thay đổi rồi mới ghi flash
+
 // ================== FEATURE FLAGS ================== 
-#define DF_ENABLE_BLE_MESH          0
+#define DF_ENABLE_BLE_MESH          1
 #define DF_ENABLE_WIFI              0
 #define DF_ENABLE_MQTT              0
 #define DF_ENABLE_LITTLEFS          1
@@ -62,4 +76,3 @@
         return ERROR_CODE_INVALID_PARAM;                                            \
     }                                                                               \
 } while(0)
-

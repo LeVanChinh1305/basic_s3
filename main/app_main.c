@@ -2,38 +2,38 @@
 #include "app_console.h"
 #include "app_littlefs.h"
 #include "app_speaker.h"
+#include "nvs_flash.h"
+#include "app_blemesh.h"
 
 static const char *TAG = "APP_MAIN";
+
+void app_main_InitNvs() {
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+}
 
 void app_main(void)
 {
 
-    LREP("MAIN", "========================================");
-    LREP("MAIN", "  %s  v%s", DF_FIRMWARE_NAME, app_common_GetVersion());
-    LREP("MAIN", "  Target : %s | HW: %s", CONFIG_IDF_TARGET, DF_HARDWARE_VERSION);
-    LREP("MAIN", "========================================");
+    LREP(TAG, "========================================");
+    LREP(TAG, "  %s  v%s", DF_FIRMWARE_NAME, app_common_GetVersion());
+    LREP(TAG, "  Target : %s | HW: %s", CONFIG_IDF_TARGET, DF_HARDWARE_VERSION);
+    LREP(TAG, "========================================");
 
-    /* Khởi động LittleFS */
-    if (app_littlefs_Init() == ERROR_CODE_OK) {
-        
-        /* Ghi thử file cấu hình JSON */
-        const char *pcConfigSample = "{\"device\":\"DOOR_GATE_V2\",\"pulse_time_ms\":500}";
-        app_littlefs_WriteTextFile("/storage/config.json", pcConfigSample);
-
-        /* Đọc lại file cấu hình */
-        char *pcReadJson = NULL;
-        if (app_littlefs_ReadTextFile("/storage/config.json", &pcReadJson) == ERROR_CODE_OK) {
-            LREP(TAG, "Noi dung doc duoc: %s", pcReadJson);
-            
-            /* Giải phóng bộ nhớ an toàn */
-            FREE_SAFE(pcReadJson);
-        }
-
-        app_speaker_Init();
-    }
-
-    /* Khởi động console sau khi các dịch vụ nền đã sẵn sàng */
     app_console_Init();
+    app_main_InitNvs();
+    app_speaker_Init();
+    app_littlefs_Init();
+#if DF_ENABLE_BLE_MESH
+    /* Khoi dong BLE Mesh sau LittleFS (cần đọc /storage/mesh_node.json) */
+    if (app_mesh_Init() != ERROR_CODE_OK) {
+        LREP_ERROR(TAG, "Khoi dong BLE Mesh THAT BAI!");
+    }
+#endif
 
     uint32_t u32Count100ms = 0;
 
@@ -48,8 +48,8 @@ void app_main(void)
             size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
 
             LREP("MAIN", "Free SRAM: %u KB | Free PSRAM: %u KB",
-                 (unsigned int)(sram_free / 1024),
-                 (unsigned int)(psram_free / 1024));
+                (unsigned int)(sram_free / 1024),
+                (unsigned int)(psram_free / 1024));
         }
 
         app_common_DelayMs(100);

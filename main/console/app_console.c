@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include "app_littlefs.h"
 #include "app_speaker.h"
+#include "app_blemesh.h"
 
 /* ================== PROMPT & CONFIG ================== */
 #define PROMPT_STR          CONFIG_IDF_TARGET
@@ -189,6 +190,25 @@ static int app_console_CmdBeep(int argc, char **argv)
     return 0;
 }
 
+#if DF_ENABLE_BLE_MESH
+static int app_console_CmdMesh(int argc, char **argv)
+{
+    app_mesh_PrintStatus();
+    return 0;
+} 
+static int app_console_CmdMeshLog(int argc, char **argv)
+{
+    app_mesh_PrintLog();
+    return 0;
+}
+static int app_console_CmdMeshReset(int argc, char **argv)
+{
+    printf("Dang xoa thong tin Provisioning, thiet bi se khoi dong lai...\n");
+    return (app_mesh_Reset() == ERROR_CODE_OK) ? 0 : 1;
+}
+#endif
+
+
 /* ================== REGISTER COMMANDS ================== */
 
 static void app_console_RegisterCommands(void)
@@ -264,6 +284,32 @@ static void app_console_RegisterCommands(void)
         .func    = &app_console_CmdBeep,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&stCmdBeep));
+
+#if DF_ENABLE_BLE_MESH
+    const esp_console_cmd_t stCmdMesh = {
+        .command = "mesh",
+        .help    = "Xem trang thai BLE Mesh Node (Unicast, AppKey, Group, OnOff)",
+        .hint    = NULL,
+        .func    = &app_console_CmdMesh,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&stCmdMesh));
+ 
+    const esp_console_cmd_t stCmdMeshLog = {
+        .command = "meshlog",
+        .help    = "In log cac lenh Generic OnOff nhan duoc gan nhat",
+        .hint    = NULL,
+        .func    = &app_console_CmdMeshLog,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&stCmdMeshLog));
+ 
+    const esp_console_cmd_t stCmdMeshReset = {
+        .command = "meshreset",
+        .help    = "Xoa Provisioning (cap mang lai tu dau) va khoi dong lai",
+        .hint    = NULL,
+        .func    = &app_console_CmdMeshReset,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&stCmdMeshReset));
+#endif
 }
 
 /* ================== INIT ================== */
