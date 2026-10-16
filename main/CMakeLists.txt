@@ -6,6 +6,7 @@ idf_component_register(
         "app_littlefs.c"
         "peripheral/app_speaker.c"
         "network/app_blemesh.c"
+        "network/app_blemesh_prov.c"
 
     INCLUDE_DIRS 
         "."

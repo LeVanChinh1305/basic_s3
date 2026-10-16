@@ -9,6 +9,7 @@
 #include "app_littlefs.h"
 #include "app_speaker.h"
 #include "app_blemesh.h"
+#include "app_blemesh_prov.h"
 
 /* ================== PROMPT & CONFIG ================== */
 #define PROMPT_STR          CONFIG_IDF_TARGET
@@ -193,7 +194,11 @@ static int app_console_CmdBeep(int argc, char **argv)
 #if DF_ENABLE_BLE_MESH
 static int app_console_CmdMesh(int argc, char **argv)
 {
-    app_mesh_PrintStatus();
+    if (app_mesh_prov_IsInitialized()) {
+        app_mesh_prov_PrintStatus();
+    } else {
+        app_mesh_PrintStatus();
+    }
     return 0;
 } 
 static int app_console_CmdMeshLog(int argc, char **argv)
@@ -205,6 +210,63 @@ static int app_console_CmdMeshReset(int argc, char **argv)
 {
     printf("Dang xoa thong tin Provisioning, thiet bi se khoi dong lai...\n");
     return (app_mesh_Reset() == ERROR_CODE_OK) ? 0 : 1;
+}
+static int app_console_CmdMeshSend(int argc, char **argv)
+{
+    if (argc < 3) {
+        printf("Su dung: meshsend <unicast_addr_hex> <0|1>\n");
+        printf("Vi du : meshsend 0x0003 1  (Gui lenh ON sang Node 0x0003)\n");
+        printf("        meshsend 0x0003 0  (Gui lenh OFF sang Node 0x0003)\n");
+        return 1;
+    }
+
+    uint16_t u16Dst = (uint16_t)strtoul(argv[1], NULL, 16);
+    uint8_t u8OnOff = (uint8_t)atoi(argv[2]);
+
+    int32_t s32Ret = app_mesh_prov_SendOnOff(u16Dst, u8OnOff);
+    if (s32Ret == ERROR_CODE_OK) {
+        printf("Da gui lenh OnOff=%u toi 0x%04X thanh cong!\n", u8OnOff, u16Dst);
+        return 0;
+    } else {
+        printf("Gui lenh thất bại! Ma loi: %d\n", (int)s32Ret);
+        return 1;
+    }
+}
+
+static int app_console_CmdMeshSendVnd(int argc, char **argv)
+{
+    if (argc < 4) {
+        printf("Su dung: meshsendvnd <addr_hex> <cmd: 1=Relay|2=Cfg|3=Sync> <relay: 0|1> [device_tag]\n");
+        printf("Vi du : meshsendvnd 0x0002 1 1 Den_Phong_Khach\n");
+        printf("        meshsendvnd 0x0002 1 0 Den_Phong_Khach\n");
+        return 1;
+    }
+
+    uint16_t u16Dst   = (uint16_t)strtoul(argv[1], NULL, 16);
+    uint8_t  u8Cmd    = (uint8_t)atoi(argv[2]);
+    uint8_t  u8Relay  = (uint8_t)atoi(argv[3]);
+    const char *pcTag = (argc >= 5) ? argv[4] : "S3_Provisioner";
+
+    static uint16_t s_u16Seq = 0;
+    st_vendor_custom_data_t stData = {0};
+    stData.u8Cmd          = u8Cmd;
+    stData.u16PacketId    = ++s_u16Seq;
+    stData.s16Temperature = 265; /* 26.5 oC */
+    stData.u16Humidity    = 700; /* 70.0 % */
+    stData.u8RelayState   = u8Relay ? 1 : 0;
+    strncpy(stData.acDeviceTag, pcTag, sizeof(stData.acDeviceTag) - 1);
+
+    printf("Dang gui Vendor Custom Data (Cmd=%u, PktId=%u, Relay=%u, Tag='%s') toi 0x%04X...\n",
+           stData.u8Cmd, stData.u16PacketId, stData.u8RelayState, stData.acDeviceTag, u16Dst);
+
+    int32_t s32Ret = app_mesh_prov_SendVendorData(u16Dst, &stData);
+    if (s32Ret == ERROR_CODE_OK) {
+        printf("Da gui goi tin Vendor thanh cong! Dang cho phan hoi STATUS tu Node...\n");
+        return 0;
+    } else {
+        printf("Gui Vendor Data that bai! Ma loi: %d\n", (int)s32Ret);
+        return 1;
+    }
 }
 #endif
 
@@ -309,6 +371,23 @@ static void app_console_RegisterCommands(void)
         .func    = &app_console_CmdMeshReset,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&stCmdMeshReset));
+
+    const esp_console_cmd_t stCmdMeshSend = {
+        .command = "meshsend",
+        .help    = "Gui lenh OnOff 0/1 toi Node/Group khac (meshsend <addr_hex> <0|1>)",
+        .hint    = NULL,
+        .func    = &app_console_CmdMeshSend,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&stCmdMeshSend));
+
+    const esp_console_cmd_t stCmdMeshSendVnd = {
+        .command = "meshsendvnd",
+        .help    = "Gui Vendor Data tuy bien toi Node (meshsendvnd <addr_hex> <cmd> <relay 0|1> [tag])",
+        .hint    = NULL,
+        .func    = &app_console_CmdMeshSendVnd,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&stCmdMeshSendVnd));
+    
 #endif
 }
 

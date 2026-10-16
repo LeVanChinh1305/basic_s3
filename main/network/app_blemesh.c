@@ -14,6 +14,7 @@
 #include "esp_ble_mesh_provisioning_api.h"
 #include "esp_ble_mesh_config_model_api.h"
 #include "esp_ble_mesh_generic_model_api.h"
+#include "app_mesh_vendor.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -26,8 +27,7 @@ static const char *TAG = "app_mesh";
 #define ROLE_NODE 0
 #endif
 
-/* ================== KIEU DU LIEU ================== */
-
+/* ================== KIỂU DỮ LIỆU ================== */
 typedef enum {
     MESH_EVT_ENABLED = 0,   /* Prov enable xong -> doi chieu trang thai da luu */
     MESH_EVT_PROV_COMPLETE, /* App cap mang xong */
@@ -39,19 +39,19 @@ typedef enum {
     MESH_EVT_ONOFF_SET      /* Nhan lenh Generic OnOff Set */
 } en_mesh_evt_t;
 
-/* Su kien day tu callback cua BLE stack sang task ung dung (qua queue) */
+/* Sự kiện đẩy từ callback của BLE stack sang task ứng dụng (qua queue) */
 typedef struct {
     en_mesh_evt_t eType;
-    int64_t       s64TimeUs;   /* esp_timer luc vao callback */
-    uint16_t      u16Src;      /* Dia chi gui (ONOFF) / NetIdx (PROV_COMPLETE, APPKEY_ADD) */
-    uint16_t      u16Dst;      /* Dia chi dich (unicast hoac group) */
+    int64_t       s64TimeUs;   /* esp_timer lúc vào callback */
+    uint16_t      u16Src;      /* Địa chỉ gửi (ONOFF) / NetIdx (PROV_COMPLETE, APPKEY_ADD) */
+    uint16_t      u16Dst;      /* Địa chỉ đích (unicast hoac group) */
     uint16_t      u16Param;    /* Unicast (PROV) / AppIdx / Group */
     uint8_t       u8OnOff;
     uint8_t       u8Ttl;
     int8_t        s8Rssi;
 } st_mesh_evt_t;
 
-/* Trang thai Node - duoc luu vao LittleFS (DF_MESH_STATE_FILE) */
+/* Trạng thái Node - được lưu vào LittleFS (DF_MESH_STATE_FILE) */
 typedef struct {
     bool     bProvisioned;
     uint16_t u16Unicast;
@@ -66,7 +66,7 @@ typedef struct {
     uint16_t u16LastDst;
 } st_mesh_info_t;
 
-/* Mot dong log vong tron */
+/* Một dòng log vòng tròn */
 typedef struct {
     int64_t  s64TimeUs;
     uint16_t u16Src;
@@ -76,23 +76,22 @@ typedef struct {
     int8_t   s8Rssi;
 } st_mesh_log_t;
 
-/* ================== TAI NGUYEN HE THONG ==================
- * Mot mutex g_hMeshMutex bao ve CA g_pstInfo VA ring buffer g_pstLog (cung mot mien du lieu).
- * Khong long mutex. Chi giu mutex de sao chep, xu ly lau (printf, ghi file) lam ngoai.
+/* ================== TÀI NGUYÊN HỆ THỐNG ==================
+ * Một mutex g_hMeshMutex bảo vệ CA g_pstInfo VA ring buffer g_pstLog (cùng một miền dự liệu).
  */
-static st_mesh_info_t   *g_pstInfo      = NULL;   /* PSRAM */
-static st_mesh_log_t    *g_pstLog       = NULL;   /* PSRAM */
-static uint32_t          g_u32LogHead   = 0;
-static uint32_t          g_u32LogCount  = 0;
+static st_mesh_info_t   *g_pstInfo      = NULL;     /* PSRAM */
+static st_mesh_log_t    *g_pstLog       = NULL;     /* PSRAM */
+static uint32_t          g_u32LogHead   = 0;        // Con trỏ ghi (write index), chỉ tới vị trí sẽ ghi bản ghi log tiếp theo trong mảng g_pstLog
+static uint32_t          g_u32LogCount  = 0;        // Đếm tổng số lượng log hiện đang có trong bộ đệm
 
-static SemaphoreHandle_t g_hMeshMutex   = NULL;
-static QueueHandle_t     g_hMeshEvtQ    = NULL;
-static TaskHandle_t      g_hMeshTask    = NULL;
+static SemaphoreHandle_t g_hMeshMutex   = NULL;     // Mutex bảo vệ vùng dữ liệu dùng chung
+static QueueHandle_t     g_hMeshEvtQ    = NULL;     // Queue dùng để truyền tin nhắn/sự kiện (st_mesh_evt_t) bất đồng bộ từ các callback của BLE stack sang task xử lý app_mesh_Task
+static TaskHandle_t      g_hMeshTask    = NULL;     // Handle của Task FreeRTOS phụ trách xử lý sự kiện Mesh và đồng bộ ghi Flash
 
-static volatile bool     g_bDirty       = false;
-static volatile int64_t  g_s64DirtyUs   = 0;
-static volatile uint32_t g_u32DropEvt   = 0;
-static bool              g_bMeshInitialized = false;
+static volatile bool     g_bDirty       = false;    // Cờ đánh dấu dữ liệu trong RAM đã bị thay đổi và cần được đồng bộ (lưu) xuống bộ nhớ Flash (LittleFS).
+static volatile int64_t  g_s64DirtyUs   = 0;        // Lưu mốc thời gian (esp_timer_get_time()) tại thời điểm cờ g_bDirty được bật
+static volatile uint32_t g_u32DropEvt   = 0;        // Bộ đếm số lượng sự kiện bị tràn/bỏ rơi (drop) khi Queue g_hMeshEvtQ bị đầy.
+static bool              g_bMeshInitialized = false;// cờ dùng xác định module đã được khởi tạo trước đó hay chưa
 
 /* ================== MODEL BLE MESH ================== */
 
@@ -122,18 +121,41 @@ static esp_ble_mesh_cfg_srv_t g_stCfgSrv = {
 
 ESP_BLE_MESH_MODEL_PUB_DEFINE(g_stOnoffPub, 2 + 3, ROLE_NODE);
 
+// đại diện cho thực thể Generic OnOff Server Model trên Node
 static esp_ble_mesh_gen_onoff_srv_t g_stOnoffSrv = {
     .rsp_ctrl.get_auto_rsp = ESP_BLE_MESH_SERVER_AUTO_RSP,
     .rsp_ctrl.set_auto_rsp = ESP_BLE_MESH_SERVER_AUTO_RSP,
 };
 
+static esp_ble_mesh_client_t g_stOnoffCli;
+
 static esp_ble_mesh_model_t g_astRootModels[] = {
     ESP_BLE_MESH_MODEL_CFG_SRV(&g_stCfgSrv),
     ESP_BLE_MESH_MODEL_GEN_ONOFF_SRV(&g_stOnoffPub, &g_stOnoffSrv),
+    ESP_BLE_MESH_MODEL_GEN_ONOFF_CLI(&g_stOnoffPub, &g_stOnoffCli),
+};
+
+/* ================== VENDOR SERVER MODEL (TIẾP NHẬN CUSTOM DATA) ================== */
+ESP_BLE_MESH_MODEL_PUB_DEFINE(g_stVndSrvPub, 3 + sizeof(st_vendor_custom_data_t), ROLE_NODE);
+
+static esp_ble_mesh_model_op_t g_astVndServerOp[] = {
+    ESP_BLE_MESH_MODEL_OP(DF_MESH_VND_OP_SET, sizeof(st_vendor_custom_data_t)),
+    ESP_BLE_MESH_MODEL_OP(DF_MESH_VND_OP_GET, 0),
+    ESP_BLE_MESH_MODEL_OP_END,
+};
+
+static esp_ble_mesh_model_t g_astVndModelsServer[] = {
+    ESP_BLE_MESH_VENDOR_MODEL(
+        DF_MESH_CID_ESP,
+        DF_MESH_VND_MODEL_ID_SERVER,
+        g_astVndServerOp,
+        &g_stVndSrvPub,
+        NULL
+    ),
 };
 
 static esp_ble_mesh_elem_t g_astElements[] = {
-    ESP_BLE_MESH_ELEMENT(0, g_astRootModels, ESP_BLE_MESH_MODEL_NONE),
+    ESP_BLE_MESH_ELEMENT(0, g_astRootModels, g_astVndModelsServer),
 };
 
 static esp_ble_mesh_comp_t g_stComp = {
@@ -142,15 +164,16 @@ static esp_ble_mesh_comp_t g_stComp = {
     .elements      = g_astElements,
 };
 
-/* ================== TIEN ICH ================== */
+/* ================== TIỆN ÍCH ================== */
 
+// Bật cờ g_bDirty = true và ghi lại mốc thời gian
 static void app_mesh_MarkDirty(void)
 {
     g_s64DirtyUs = esp_timer_get_time();
     g_bDirty     = true;
 }
 
-/* Quy tac mau A: goi tu callback cua BLE stack -> KHONG block, KHONG lay mutex, KHONG ghi flash */
+/* Quy tắc mẫu A: gọi từ callback của BLE stack -> KHÔNG block, KHÔNG lấy mutex, KHÔNG ghi flash */
 static void app_mesh_PostEvt(const st_mesh_evt_t *pstEvt)
 {
     if (g_hMeshEvtQ == NULL) return;
@@ -159,7 +182,7 @@ static void app_mesh_PostEvt(const st_mesh_evt_t *pstEvt)
     }
 }
 
-/* ================== LUU / NAP TRANG THAI (LITTLEFS) ================== */
+/* ================== LƯU / NẠP TRẠNG THÁI (LITTLEFS) ================== */
 
 static void app_mesh_LoadState(void)
 {
@@ -180,7 +203,7 @@ static void app_mesh_LoadState(void)
         return;
     }
 
-    /* Parse xong ngoai khoa, chi giu mutex luc gan vao struct dung chung */
+    /* Parse xong ngoài khóa, chỉ giữ mutex lúc gán vào struct dùng chung */
     st_mesh_info_t stLoaded = {0};
     cJSON *pItem = NULL;
     if ((pItem = cJSON_GetObjectItem(pRoot, "onoff"))   && cJSON_IsNumber(pItem)) stLoaded.u8OnOff      = pItem->valueint ? 1 : 0;
@@ -200,12 +223,14 @@ static void app_mesh_LoadState(void)
     }
 
     LREP(TAG, "Nap trang thai: onoff=%u boot=%u rx=%u unicast=0x%04X group=0x%04X",
-         stLoaded.u8OnOff, (unsigned)stLoaded.u32BootCount, (unsigned)stLoaded.u32RxCount,
-         stLoaded.u16Unicast, stLoaded.u16Group);
+        stLoaded.u8OnOff, 
+        (unsigned)stLoaded.u32BootCount, 
+        (unsigned)stLoaded.u32RxCount,
+        stLoaded.u16Unicast, stLoaded.u16Group);
 }
 
 /* Mau snapshot: sao chep struct trong khoa ngan, dung JSON + ghi flash ngoai khoa.
- * Ghi file tam roi rename -> khong hong file neu mat dien giua chung. */
+ * Ghi file tam roi rename -> không hỏng file nếu mất điện giữa chừng. */
 static void app_mesh_SaveState(void)
 {
     st_mesh_info_t stSnap;
@@ -243,10 +268,9 @@ static void app_mesh_SaveState(void)
     cJSON_free(pcJson);
 }
 
-/* ================== CALLBACK BLE STACK (CHAY TRONG TASK CUA BLE) ================== */
+/* ================== CALLBACK BLE STACK (CHẠY TRONG TASK CỦA BLE) ================== */
 
-static void app_mesh_ProvCb(esp_ble_mesh_prov_cb_event_t eEvent,
-                            esp_ble_mesh_prov_cb_param_t *pstParam)
+static void app_mesh_ProvCb(esp_ble_mesh_prov_cb_event_t eEvent, esp_ble_mesh_prov_cb_param_t *pstParam)
 {
     st_mesh_evt_t stEvt = { .s64TimeUs = esp_timer_get_time() };
 
@@ -288,8 +312,7 @@ static void app_mesh_ProvCb(esp_ble_mesh_prov_cb_event_t eEvent,
     }
 }
 
-static void app_mesh_CfgSrvCb(esp_ble_mesh_cfg_server_cb_event_t eEvent,
-                              esp_ble_mesh_cfg_server_cb_param_t *pstParam)
+static void app_mesh_CfgSrvCb(esp_ble_mesh_cfg_server_cb_event_t eEvent, esp_ble_mesh_cfg_server_cb_param_t *pstParam)
 {
     if (eEvent != ESP_BLE_MESH_CFG_SERVER_STATE_CHANGE_EVT) return;
 
@@ -309,6 +332,11 @@ static void app_mesh_CfgSrvCb(esp_ble_mesh_cfg_server_cb_event_t eEvent,
             stEvt.eType    = MESH_EVT_APP_BIND;
             stEvt.u16Param = pstParam->value.state_change.mod_app_bind.app_idx;
             app_mesh_PostEvt(&stEvt);
+        } else if (pstParam->value.state_change.mod_app_bind.company_id == DF_MESH_CID_ESP &&
+                   pstParam->value.state_change.mod_app_bind.model_id == DF_MESH_VND_MODEL_ID_SERVER) {
+            LREP(TAG, "===> [NODE] DA BIND APPKEY 0x%04X VAO VENDOR SERVER MODEL (CID=0x%04X, ID=0x%04X) <===",
+                 pstParam->value.state_change.mod_app_bind.app_idx,
+                 DF_MESH_CID_ESP, DF_MESH_VND_MODEL_ID_SERVER);
         }
         break;
 
@@ -335,8 +363,7 @@ static void app_mesh_CfgSrvCb(esp_ble_mesh_cfg_server_cb_event_t eEvent,
     }
 }
 
-static void app_mesh_GenericSrvCb(esp_ble_mesh_generic_server_cb_event_t eEvent,
-                                  esp_ble_mesh_generic_server_cb_param_t *pstParam)
+static void app_mesh_GenericSrvCb(esp_ble_mesh_generic_server_cb_event_t eEvent, esp_ble_mesh_generic_server_cb_param_t *pstParam)
 {
     if (eEvent != ESP_BLE_MESH_GENERIC_SERVER_STATE_CHANGE_EVT) return;
 
@@ -358,6 +385,105 @@ static void app_mesh_GenericSrvCb(esp_ble_mesh_generic_server_cb_event_t eEvent,
 
     /* Callback chi dong goi va day vao queue; log/luu file do task xu ly */
     app_mesh_PostEvt(&stEvt);
+}
+
+/* ================== CALLBACK VENDOR SERVER MODEL ================== */
+
+static void app_mesh_VendorServerCb(esp_ble_mesh_model_cb_event_t eEvent,
+                                    esp_ble_mesh_model_cb_param_t *pstParam)
+{
+    if (!pstParam) return;
+
+    switch (eEvent) {
+    case ESP_BLE_MESH_MODEL_OPERATION_EVT: {
+        uint32_t u32Opcode = pstParam->model_operation.opcode;
+        uint16_t u16Src    = pstParam->model_operation.ctx->addr;
+
+        if (u32Opcode == DF_MESH_VND_OP_SET || u32Opcode == DF_MESH_VND_OP_GET) {
+            st_vendor_custom_data_t stRsp = {0};
+
+            if (u32Opcode == DF_MESH_VND_OP_SET) {
+                if (pstParam->model_operation.length < sizeof(st_vendor_custom_data_t)) {
+                    LREP_WARNING(TAG, "[VND SRV] Payload SET qua ngan: %u bytes", pstParam->model_operation.length);
+                    break;
+                }
+                st_vendor_custom_data_t stRx = {0};
+                memcpy(&stRx, pstParam->model_operation.msg, sizeof(stRx));
+                stRx.acDeviceTag[sizeof(stRx.acDeviceTag) - 1] = '\0';
+
+                LREP(TAG, "\n========================================================");
+                LREP(TAG, " ===> [VND SRV] NHAN LENH SET TU PROVISIONER 0x%04X", u16Src);
+                LREP(TAG, "   Cmd Code    : %u", stRx.u8Cmd);
+                LREP(TAG, "   Packet ID   : %u", stRx.u16PacketId);
+                LREP(TAG, "   Nhiet do    : %.1f oC (raw=%d)", (float)stRx.s16Temperature / 10.0f, stRx.s16Temperature);
+                LREP(TAG, "   Do am       : %.1f %% (raw=%u)", (float)stRx.u16Humidity / 10.0f, stRx.u16Humidity);
+                LREP(TAG, "   Relay State : %s (%u)", stRx.u8RelayState ? "ON" : "OFF", stRx.u8RelayState);
+                LREP(TAG, "   Device Tag  : '%s'", stRx.acDeviceTag);
+                LREP(TAG, "   RSSI / TTL  : %d dBm / %u", pstParam->model_operation.ctx->recv_rssi, pstParam->model_operation.ctx->recv_ttl);
+                LREP(TAG, "========================================================\n");
+
+                /* Cap nhat trang thai OnOff noi bo va kich hoat ghi Flash */
+                {
+                    APP_LOCK_GUARD(stGuard, g_hMeshMutex, MESH_INFO_MUTEX_NAME, DF_LOCK_TIMEOUT_MS);
+                    if (stGuard.bLocked) {
+                        g_pstInfo->u8OnOff    = stRx.u8RelayState ? 1 : 0;
+                        g_pstInfo->u16LastSrc = u16Src;
+                        g_pstInfo->u32RxCount++;
+                    }
+                }
+                g_stOnoffSrv.state.onoff = stRx.u8RelayState ? 1 : 0;
+                app_mesh_MarkDirty();
+
+                /* Chuan bi ban tin phan hoi STATUS (kem thong so cam bien phia Node) */
+                stRsp.u8Cmd          = 3; /* ACK / STATUS */
+                stRsp.u16PacketId    = stRx.u16PacketId;
+                stRsp.s16Temperature = 285; /* Gia lap doc cam bien: 28.5 oC */
+                stRsp.u16Humidity    = 650; /* Gia lap doc cam bien: 65.0 % */
+                stRsp.u8RelayState   = stRx.u8RelayState ? 1 : 0;
+                snprintf(stRsp.acDeviceTag, sizeof(stRsp.acDeviceTag), "ACK_NODE_%04X",
+                         esp_ble_mesh_get_primary_element_address());
+            } else {
+                /* Lenh GET */
+                uint8_t u8CurState = 0;
+                {
+                    APP_LOCK_GUARD(stGuard, g_hMeshMutex, MESH_INFO_MUTEX_NAME, DF_LOCK_TIMEOUT_MS);
+                    if (stGuard.bLocked) u8CurState = g_pstInfo->u8OnOff;
+                }
+                stRsp.u8Cmd          = 3;
+                stRsp.u16PacketId    = 0;
+                stRsp.s16Temperature = 285;
+                stRsp.u16Humidity    = 650;
+                stRsp.u8RelayState   = u8CurState;
+                snprintf(stRsp.acDeviceTag, sizeof(stRsp.acDeviceTag), "GET_RSP_%04X",
+                         esp_ble_mesh_get_primary_element_address());
+            }
+
+            /* Gui goi STATUS ve lai Provisioner */
+            esp_err_t err = esp_ble_mesh_server_model_send_msg(
+                pstParam->model_operation.model,
+                pstParam->model_operation.ctx,
+                DF_MESH_VND_OP_STATUS,
+                sizeof(stRsp),
+                (uint8_t *)&stRsp
+            );
+            if (err == ESP_OK) {
+                LREP(TAG, "[VND SRV] Da gui phan hoi STATUS thanh cong toi 0x%04X", u16Src);
+            } else {
+                LREP_ERROR(TAG, "[VND SRV] Gui STATUS that bai: %s", esp_err_to_name(err));
+            }
+        }
+        break;
+    }
+
+    case ESP_BLE_MESH_MODEL_SEND_COMP_EVT:
+        if (pstParam->model_send_comp.err_code != 0) {
+            LREP_ERROR(TAG, "[VND SRV] Gui tin that bai, ma loi: %d", pstParam->model_send_comp.err_code);
+        }
+        break;
+
+    default:
+        break;
+    }
 }
 
 /* ================== TASK XU LY SU KIEN ================== */
@@ -514,7 +640,6 @@ static void app_mesh_Task(void *pvParam)
 }
 
 /* ================== KHOI TAO BLUETOOTH ================== */
-
 static esp_err_t app_mesh_BluetoothInit(void)
 {
     esp_err_t eRet;
@@ -539,41 +664,50 @@ static esp_err_t app_mesh_BluetoothInit(void)
 
 int32_t app_mesh_Init(void)
 {
-    if (g_bMeshInitialized) return ERROR_CODE_OK;
+    if (g_bMeshInitialized) return ERROR_CODE_OK;   
 
-    g_pstInfo = (st_mesh_info_t *)MALLOC_PSRAM(sizeof(st_mesh_info_t));
-    g_pstLog  = (st_mesh_log_t *)MALLOC_PSRAM(sizeof(st_mesh_log_t) * DF_MESH_LOG_DEPTH);
+    // Cấp phát bộ nhớ vừa đủ để chứa 1 struct st_mesh_info_t
+    g_pstInfo = (st_mesh_info_t *)  MALLOC_PSRAM(sizeof(st_mesh_info_t));
+    //Cấp phát mảng Ring Buffer lưu log gồm DF_MESH_LOG_DEPTH phần tử
+    g_pstLog  = (st_mesh_log_t *)   MALLOC_PSRAM(sizeof(st_mesh_log_t) * DF_MESH_LOG_DEPTH);
+
     if (g_pstInfo == NULL || g_pstLog == NULL) {
-        LREP_ERROR(TAG, "Khong du PSRAM cho Mesh!");
+        LREP_ERROR(TAG, "Không đủ PSRAM cho Mesh!");
         FREE_SAFE(g_pstInfo);
         FREE_SAFE(g_pstLog);
         return ERROR_CODE_NO_MEMORY;
     }
 
+    // Khởi tạo một Mutex (Mutual Exclusion) để bảo vệ vùng dữ liệu chung (g_pstInfo và g_pstLog) 
+    // khỏi nguy cơ tranh chấp dữ liệu (Race Condition) khi được truy cập từ nhiều Task khác nhau.
     g_hMeshMutex = xSemaphoreCreateMutex();
+
+    // Khởi tạo hàng đợi FIFO (First-In, First-Out) chứa các sự kiện nhận từ mạng Mesh
     g_hMeshEvtQ  = xQueueCreate(DF_MESH_EVT_QUEUE_LEN, sizeof(st_mesh_evt_t));
+
     if (g_hMeshMutex == NULL || g_hMeshEvtQ == NULL) {
-        LREP_ERROR(TAG, "Tao mutex/queue that bai!");
+        LREP_ERROR(TAG, "Tạo mutex/queue thất bại!");
         return ERROR_CODE_FAIL;
     }
 
-    /* 1. Nap trang thai cu tu LittleFS */
+    /* 1. Nạp trạng thái cũ từ LittleFS */
     app_mesh_LoadState();
 
     uint8_t u8OnOff = 0;
     {
+        // Giới hạn vùng hoạt động của Lock Guard. Mutex chỉ bị giữ trong đúng khoảng thời gian đọc/ghi 2 biến, 
+        // sau đó tự động giải phóng ngay lập tức khi ra khỏi cặp dấu ngoặc nhọn {}
         APP_LOCK_GUARD(stGuard, g_hMeshMutex, MESH_INFO_MUTEX_NAME, DF_LOCK_TIMEOUT_MS);
-        if (!stGuard.bLocked) return ERROR_CODE_TIMEOUT;
-        g_pstInfo->u32BootCount++;
-        u8OnOff = g_pstInfo->u8OnOff;
+        if (!stGuard.bLocked) return ERROR_CODE_TIMEOUT;    // Kiểm tra xem việc lấy Mutex có bị quá thời gian cho phép
+        g_pstInfo->u32BootCount++;                          // Tăng số lần thiết bị đã khởi động lên 1 unit.
+        u8OnOff = g_pstInfo->u8OnOff;                       // Lấy trạng thái On/Off cũ
     }
     g_stOnoffSrv.state.onoff = u8OnOff;
     app_mesh_MarkDirty();
 
     /* 2. Task xu ly su kien (tao truoc de callback BLE khong mat su kien) */
-    if (xTaskCreate(app_mesh_Task, "app_mesh_task", DF_MESH_TASK_STACK, NULL,
-                    DF_MESH_TASK_PRIO, &g_hMeshTask) != pdPASS) {
-        LREP_ERROR(TAG, "Tao task mesh that bai!");
+    if (xTaskCreate(app_mesh_Task, "app_mesh_task", DF_MESH_TASK_STACK, NULL, DF_MESH_TASK_PRIO, &g_hMeshTask) != pdPASS) {
+        LREP_ERROR(TAG, "Tạo task mesh thất bại!");
         return ERROR_CODE_FAIL;
     }
 
@@ -588,19 +722,24 @@ int32_t app_mesh_Init(void)
     char acName[32];
     snprintf(acName, sizeof(acName), "%s%02X%02X", DF_MESH_DEVICE_NAME_PREFIX, au8Mac[4], au8Mac[5]);
 
-    /* 5. Dang ky callback -> init mesh -> bat Provisioning (PB-ADV + PB-GATT) */
-    esp_ble_mesh_register_prov_callback(app_mesh_ProvCb);
-    esp_ble_mesh_register_config_server_callback(app_mesh_CfgSrvCb);
-    esp_ble_mesh_register_generic_server_callback(app_mesh_GenericSrvCb);
+    // 5. đăng ký các hàm phản hồi sự kiện (Callback Functions) từ ứng dụng với ESP-IDF BLE Mesh Stack trước khi tiến hành khởi tạo mạng
+    // Tất cả 3 hàm callback trên (app_mesh_ProvCb, app_mesh_CfgSrvCb, app_mesh_GenericSrvCb) đều chạy trực tiếp trên Task của BLE Stack (Host Task)
+    esp_ble_mesh_register_prov_callback(app_mesh_ProvCb);                   // Đăng ký Callback Provisioning
+    esp_ble_mesh_register_config_server_callback(app_mesh_CfgSrvCb);        // Đăng ký Callback Configuration Server
+    esp_ble_mesh_register_generic_server_callback(app_mesh_GenericSrvCb);   // Đăng ký Generic Server
+    esp_ble_mesh_register_custom_model_callback(app_mesh_VendorServerCb);    // Đăng ký Vendor Model Server (nhận SET/GET tùy biến)
 
+    // Khởi tạo lõi (Core) của BLE Mesh Stack với các thông số cấu hình chính
     esp_err_t eRet = esp_ble_mesh_init(&g_stProv, &g_stComp);
     if (eRet != ESP_OK) {
         LREP_ERROR(TAG, "esp_ble_mesh_init: %s", esp_err_to_name(eRet));
         return ERROR_CODE_FAIL;
     }
 
+    // Đặt tên thiết bị sẽ được phát ra trong gói tin quảng bá Unprovisioned Beacon
     esp_ble_mesh_set_unprovisioned_device_name(acName);
 
+    // Bật chế độ Cấp mạng: Cho phép Node phát quảng bá sẵn sàng chờ App/Gateway kết nối để nạp mạng (Provisioning).
     eRet = esp_ble_mesh_node_prov_enable((esp_ble_mesh_prov_bearer_t)(ESP_BLE_MESH_PROV_ADV | ESP_BLE_MESH_PROV_GATT));
     if (eRet != ESP_OK) {
         LREP_ERROR(TAG, "node_prov_enable: %s", esp_err_to_name(eRet));
@@ -638,6 +777,7 @@ void app_mesh_PrintStatus(void)
     printf("Unicast       : 0x%04X\n", u16Addr);
     printf("NetIdx/AppIdx : 0x%04X / 0x%04X\n", stSnap.u16NetIdx, stSnap.u16AppIdx);
     printf("AppKey bound  : %s\n", stSnap.bAppBound ? "YES" : "NO");
+    printf("Vendor Model  : Server 0x%04X (CID=0x%04X)\n", DF_MESH_VND_MODEL_ID_SERVER, DF_MESH_CID_ESP);
     if (stSnap.u16Group != 0) printf("Group sub     : 0x%04X\n", stSnap.u16Group);
     else                      printf("Group sub     : (chua)\n");
     printf("OnOff state   : %u\n", stSnap.u8OnOff);
@@ -689,11 +829,66 @@ int32_t app_mesh_Reset(void)
 {
     if (!g_bMeshInitialized) return ERROR_CODE_FAIL;
 
+    LREP_WARNING(TAG, "Thuc hien Reset Node (Local Reset)...");
+
+    /* 1. Xoa NetKey/AppKey/Unicast trong NVS của BLE Mesh Stack */
     esp_err_t eRet = esp_ble_mesh_node_local_reset();
     if (eRet != ESP_OK) {
-        LREP_ERROR(TAG, "node_local_reset: %s", esp_err_to_name(eRet));
+        LREP_ERROR(TAG, "node_local_reset that bai: %s", esp_err_to_name(eRet));
+    }
+
+    /* 2. Chu dong xoa file trang thai trong LittleFS ngay lap tuc */
+    if (app_littlefs_FileExists(DF_MESH_STATE_FILE)) {
+        remove(DF_MESH_STATE_FILE);
+        LREP(TAG, "Da xoa file trang thai LittleFS: %s", DF_MESH_STATE_FILE);
+    }
+
+    /* 3. Restart chip sau 500ms de dam bao log in xong */
+    app_common_DelayMs(500);
+    esp_restart();
+
+    return ERROR_CODE_OK;
+}
+
+int32_t app_mesh_SendOnOff(uint16_t u16DstAddr, uint8_t u8OnOff)
+{
+    if (!g_bMeshInitialized) {
+        printf("Mesh chua khoi tao!\n");
         return ERROR_CODE_FAIL;
     }
-    /* Su kien PROV_RESET se kich hoat xoa trang thai + esp_restart() trong task mesh */
+
+    uint16_t u16NetIdx = 0;
+    uint16_t u16AppIdx = 0;
+
+    {
+        APP_LOCK_GUARD(stGuard, g_hMeshMutex, MESH_INFO_MUTEX_NAME, DF_LOCK_TIMEOUT_MS);
+        if (!stGuard.bLocked) return ERROR_CODE_TIMEOUT;
+        u16NetIdx = g_pstInfo->u16NetIdx;
+        u16AppIdx = g_pstInfo->u16AppIdx;
+    }
+
+    esp_ble_mesh_generic_client_set_state_t stSetParam = {
+        .onoff_set.onoff = (u8OnOff ? 1 : 0),
+        .onoff_set.op_en = false,
+    };
+
+    esp_ble_mesh_client_common_param_t stCommonParam = {
+        .opcode      = ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET_UNACK,
+        .model       = &g_astRootModels[2], /* Model Client thứ 3 trong mảng */
+        .msg_timeout = 0,
+        .ctx.net_idx   = u16NetIdx,
+        .ctx.app_idx   = u16AppIdx,
+        .ctx.addr      = u16DstAddr,
+        .ctx.send_ttl  = 7,
+    };
+
+    esp_err_t eRet = esp_ble_mesh_generic_client_set_state(&stCommonParam, &stSetParam);
+    if (eRet != ESP_OK) {
+        LREP_ERROR(TAG, "Gui lenh OnOff_Set that bai: %s", esp_err_to_name(eRet));
+        return ERROR_CODE_FAIL;
+    }
+
+    LREP(TAG, "[TX] Gui OnOff=%u -> Dst=0x%04X (NetIdx=0x%04X, AppIdx=0x%04X)",
+         u8OnOff, u16DstAddr, u16NetIdx, u16AppIdx);
     return ERROR_CODE_OK;
 }

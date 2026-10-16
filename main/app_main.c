@@ -4,11 +4,14 @@
 #include "app_speaker.h"
 #include "nvs_flash.h"
 #include "app_blemesh.h"
+#include "app_blemesh_prov.h"
+
 
 static const char *TAG = "APP_MAIN";
 
 void app_main_InitNvs() {
-    esp_err_t ret = nvs_flash_init();
+    esp_err_t ret = nvs_flash_erase();
+    ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
@@ -29,8 +32,8 @@ void app_main(void)
     app_speaker_Init();
     app_littlefs_Init();
 #if DF_ENABLE_BLE_MESH
-    /* Khoi dong BLE Mesh sau LittleFS (cần đọc /storage/mesh_node.json) */
-    if (app_mesh_Init() != ERROR_CODE_OK) {
+    // Khoi dong BLE Mesh sau LittleFS (cần đọc /storage/mesh_node.json) 
+    if (app_mesh_prov_Init() != ERROR_CODE_OK) {
         LREP_ERROR(TAG, "Khoi dong BLE Mesh THAT BAI!");
     }
 #endif

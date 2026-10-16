@@ -34,9 +34,9 @@
 
 // ================== BLE MESH (KICH BAN 1: ONOFF SERVER) ==================
 #define DF_MESH_COMPANY_ID          0x02E5
-#define DF_MESH_RELAY               1
-#define DF_MESH_DEVICE_NAME_PREFIX  "S3-MESH-"      // Tên trên nRF Mesh = prefix + 2 byte cuối MAC
-#define DF_MESH_EVT_QUEUE_LEN       16
+#define DF_MESH_RELAY               1               // Relay Node (Nút chuyển tiếp)
+#define DF_MESH_DEVICE_NAME_PREFIX  "VCONNEX_MESH_" // Tên trên nRF Mesh = prefix + 2 byte cuối MAC
+#define DF_MESH_EVT_QUEUE_LEN       16              // Số lượng phần tử tối đa mà hàng đợi có thể chứa
 #define DF_MESH_TASK_STACK          4096
 #define DF_MESH_TASK_PRIO           5
 #define DF_MESH_LOG_DEPTH           32              // Số lệnh ONOFF lưu trong ring buffer (PSRAM)
