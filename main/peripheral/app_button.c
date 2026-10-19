@@ -34,9 +34,7 @@ static void app_button_OnHold3s(void)
     LREP(TAG, "HOLD >= 3s → BluFi provisioning");
 
     /* Beep phản hồi */
-    app_speaker_PlayBeep(1000, 150, 80);
-    app_common_DelayMs(200);
-    app_speaker_PlayBeep(1500, 150, 80);
+    app_speaker_PlayByID(SPEAKER_SOUND_AUTO_MODE);
 
 #if DF_ENABLE_BLUFI
     if (app_blufi_IsRunning()) {
@@ -57,11 +55,8 @@ static void app_button_OnHold10s(void)
 {
     LREP(TAG, "HOLD >= 10s → Factory reset (xoa Wi-Fi config)");
 
-    app_speaker_PlayBeep(500, 100, 80);
-    app_common_DelayMs(100);
-    app_speaker_PlayBeep(500, 100, 80);
-    app_common_DelayMs(100);
-    app_speaker_PlayBeep(500, 100, 80);
+    app_speaker_PlayByID(SPEAKER_SOUND_MANUAL_MODE);
+    app_common_DelayMs(1000);
 
 #if DF_ENABLE_WIFI
     app_wifi_Disconnect();

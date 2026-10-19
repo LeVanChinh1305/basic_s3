@@ -62,6 +62,7 @@ void app_main(void)
         LREP_ERROR(TAG, "BLE Mesh init THAT BAI!");
 #endif
 
+    app_speaker_PlayByID(SPEAKER_SOUND_STARTUP_SUCCESS);
     LREP(TAG, "San sang. Nhan giu nut 3s de them thiet bi (BluFi).");
 
     uint32_t u32Count100ms = 0;

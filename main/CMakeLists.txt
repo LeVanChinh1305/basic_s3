@@ -34,3 +34,5 @@ idf_component_register(
         esp_netif
         esp_event
 )
+
+littlefs_create_partition_image(storage ../littlefs_voice FLASH_IN_PROJECT)

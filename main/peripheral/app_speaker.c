@@ -44,6 +44,18 @@ static const float g_fAudioCompRelease     = 0.0002f;
 static float       g_fAudioNoiseGateThresh = 0.15f;
 static const float g_fAudioNoiseGateAtten  = 0.05f;
 
+//====================mảng ánh xạ tên file âm thanh ==============
+static const char *g_apcSoundFiles[SPEAKER_SOUND_MAX] = {
+    [SPEAKER_SOUND_WAKE]           = "beep.wav",
+    [SPEAKER_SOUND_STARTING_UP]    = "starting_up.wav",
+    [SPEAKER_SOUND_STARTUP_SUCCESS]= "startup_successful.wav",
+    [SPEAKER_SOUND_AUTO_MODE]      = "auto_mode.wav",
+    [SPEAKER_SOUND_MANUAL_MODE]    = "manual_mode.wav",
+    [SPEAKER_SOUND_OTA_RUNNING]    = "update_ota_running.wav",
+    [SPEAKER_SOUND_OTA_SUCCESS]    = "update_ota_success.wav",
+    [SPEAKER_SOUND_OTA_FAIL]       = "update_ota_fail.wav",
+};
+
 /* ================== THUẬT TOÁN DSP ÂM THANH ================== */
 
 static inline float app_speaker_ClampF32(float fVal, float fMin, float fMax)
@@ -362,4 +374,12 @@ void app_speaker_PlayBeep(int32_t s32FreqHz, int32_t s32DurationMs, int32_t s32V
 
     i2s_channel_disable(g_stI2sTxChan);
     app_speaker_EnableAmp(false);
+}
+
+int32_t app_speaker_PlayByID(app_speaker_sound_t eSound)
+{
+    if (eSound < 0 || eSound >= SPEAKER_SOUND_MAX) {
+        return ERROR_CODE_INVALID_PARAM;
+    }
+    return app_speaker_PlayByName(g_apcSoundFiles[eSound]);
 }

@@ -22,8 +22,7 @@ static esp_netif_t *g_pstStaNetif = NULL;
 
 /* ================== EVENT HANDLER (nội bộ) ================== */
 
-static void app_wifi_EventHandler(void *arg, esp_event_base_t event_base,
-                                  int32_t event_id, void *event_data)
+static void app_wifi_EventHandler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     (void)arg;
 
@@ -108,15 +107,13 @@ int32_t app_wifi_Init(void)
         return ERROR_CODE_FAIL;
     }
 
-    err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                              &app_wifi_EventHandler, NULL, NULL);
+    err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &app_wifi_EventHandler, NULL, NULL);
     if (err != ESP_OK) {
         LREP_ERROR(TAG, "register WIFI_EVENT: %s", esp_err_to_name(err));
         return ERROR_CODE_FAIL;
     }
 
-    err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                              &app_wifi_EventHandler, NULL, NULL);
+    err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &app_wifi_EventHandler, NULL, NULL);
     if (err != ESP_OK) {
         LREP_ERROR(TAG, "register IP_EVENT: %s", esp_err_to_name(err));
         return ERROR_CODE_FAIL;
